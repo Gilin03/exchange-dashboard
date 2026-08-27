@@ -80,16 +80,38 @@ function App() {
   // 오늘 기록 자동 저장
   // -----------------------------
   const saveTodayRecord = async (data) => {
+    console.log("🔥 새 saveTodayRecord 실행됨", data);
+
     const today = getKoreaDate();
+    const fetchedAt = new Date().toISOString();
 
     addLog(`오늘 기록 확인: ${today}`);
 
-    const { data: existingRecord, error: checkError } =
-      await supabase
-        .from("exchange_records")
-        .select("id")
-        .eq("record_date", today)
-        .maybeSingle();
+    const newRecord = {
+      record_date: today,
+      rate: data.rate,
+      normalized_value: data.rate,
+      unit: "KRW per USD",
+
+      api_date: data.date,
+      checked_at: fetchedAt,
+
+      signal_id: "usd-krw",
+      source_name: "Frankfurter API",
+      source_url: API_URL,
+      source_time: data.date ? `${data.date}T00:00:00.000Z` : null,
+      fetched_at: fetchedAt,
+      record_timezone: "Asia/Seoul",
+    };
+
+    console.log("🔥 저장할 newRecord:", newRecord);
+
+    // 같은 날짜의 기존 기록 확인
+    const { data: existingRecord, error: checkError } = await supabase
+      .from("exchange_records")
+      .select("id")
+      .eq("record_date", today)
+      .maybeSingle();
 
     if (checkError) {
       console.error("기존 기록 확인 실패:", checkError);
@@ -97,25 +119,41 @@ function App() {
       return;
     }
 
+    // 같은 날짜가 있으면 UPDATE
     if (existingRecord) {
-      addLog("오늘 기록이 이미 존재함 → 중복 저장 안 함");
+      addLog("오늘 기록 존재 → 기존 기록 갱신");
+
+      const { data: updatedData, error: updateError } = await supabase
+        .from("exchange_records")
+        .update(newRecord)
+        .eq("id", existingRecord.id)
+        .select();
+
+      console.log("🔥 UPDATE 결과:", updatedData);
+      console.log("🔥 UPDATE 오류:", updateError);
+
+      if (updateError) {
+        console.error("오늘 기록 갱신 실패:", updateError);
+        addLog("Supabase 기록 갱신 실패", "error");
+        return;
+      }
+
+      addLog("오늘 데이터 Supabase 갱신 완료", "success");
+
       await loadRecords();
       return;
     }
 
-    const newRecord = {
-      record_date: today,
-      rate: data.rate,
-      unit: "KRW per USD",
-      api_date: data.date,
-      checked_at: new Date().toISOString(),
-    };
+    // 새로운 날짜면 INSERT
+    addLog("오늘 실제 환율 데이터 신규 저장 시작");
 
-    addLog("오늘 실제 환율 데이터 저장 시작");
-
-    const { error: insertError } = await supabase
+    const { data: insertedData, error: insertError } = await supabase
       .from("exchange_records")
-      .insert(newRecord);
+      .insert(newRecord)
+      .select();
+
+    console.log("🔥 INSERT 결과:", insertedData);
+    console.log("🔥 INSERT 오류:", insertError);
 
     if (insertError) {
       console.error("오늘 기록 저장 실패:", insertError);
@@ -123,7 +161,7 @@ function App() {
       return;
     }
 
-    addLog("오늘 데이터 Supabase 저장 완료", "success");
+    addLog("오늘 데이터 Supabase 신규 저장 완료", "success");
 
     await loadRecords();
   };
@@ -136,9 +174,7 @@ function App() {
       addLog("API 요청 시작");
       addLog("Timeout 테스트: 요청 지연 시작");
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, 2500)
-      );
+      await new Promise((resolve) => setTimeout(resolve, 2500));
 
       addLog("Timeout 감지", "error");
       throw new Error("TIMEOUT");
@@ -171,10 +207,7 @@ function App() {
       addLog("API 응답 수신");
       addLog("응답 필드 검사 시작");
 
-      addLog(
-        "필수 필드(rate/date) 확인 실패",
-        "error"
-      );
+      addLog("필수 필드(rate/date) 확인 실패", "error");
 
       return {
         wrong: true,
@@ -193,9 +226,7 @@ function App() {
       setStatusType("loading");
 
       if (mode) {
-        addLog(
-          `검증 테스트 시작: ${getModeName(mode)}`
-        );
+        addLog(`검증 테스트 시작: ${getModeName(mode)}`);
       } else {
         addLog("실제 API 요청 시작");
       }
@@ -244,12 +275,8 @@ function App() {
       }
 
       if (mode) {
-        addLog(
-          `${getModeName(mode)} 테스트 종료`,
-          "success"
-        );
+        addLog(`${getModeName(mode)} 테스트 종료`, "success");
       }
-
     } catch (error) {
       console.error(error);
 
@@ -284,26 +311,14 @@ function App() {
       setStatusType("stale");
 
       // 가장 중요한 장애 처리 로그
-      addLog(
-        `${message} 처리 분기로 이동`,
-        "error"
-      );
+      addLog(`${message} 처리 분기로 이동`, "error");
 
       if (rate !== null) {
-        addLog(
-          `마지막 정상값 유지: ${rate.toLocaleString()} KRW`,
-          "success"
-        );
+        addLog(`마지막 정상값 유지: ${rate.toLocaleString()} KRW`, "success");
 
-        addLog(
-          "현재 자료가 아니므로 '오래된 데이터' 표시",
-          "warning"
-        );
+        addLog("현재 자료가 아니므로 '오래된 데이터' 표시", "warning");
       } else {
-        addLog(
-          "정상값이 없어 값을 표시하지 않음",
-          "warning"
-        );
+        addLog("정상값이 없어 값을 표시하지 않음", "warning");
       }
 
       addLog("다시 시도하면 정상 API 조회 가능");
@@ -354,6 +369,9 @@ function App() {
   // -----------------------------
   // 비교
   // -----------------------------
+  // -----------------------------
+  // 비교
+  // -----------------------------
   const currentRecord = records[0];
   const previousRecord = records[1];
 
@@ -361,23 +379,30 @@ function App() {
   let changeRate = null;
 
   if (currentRecord && previousRecord) {
-    difference =
-      Number(currentRecord.rate) -
-      Number(previousRecord.rate);
+    const currentValue = Number(
+      currentRecord.normalized_value ?? currentRecord.rate,
+    );
 
-    changeRate =
-      (difference / Number(previousRecord.rate)) * 100;
+    const previousValue = Number(
+      previousRecord.normalized_value ?? previousRecord.rate,
+    );
+
+    if (
+      Number.isFinite(currentValue) &&
+      Number.isFinite(previousValue) &&
+      previousValue !== 0 &&
+      currentRecord.unit === previousRecord.unit
+    ) {
+      difference = currentValue - previousValue;
+      changeRate = (difference / previousValue) * 100;
+    }
   }
-
   return (
     <div className="app">
       <div className="container">
-
         <header className="header">
           <div>
-            <p className="eyebrow">
-              DAILY INFORMATION BOARD
-            </p>
+            <p className="eyebrow">DAILY INFORMATION BOARD</p>
 
             <h1>오늘의 환율 정보판</h1>
 
@@ -388,58 +413,46 @@ function App() {
         </header>
 
         <main className="dashboard">
-
           {/* 현재 환율 */}
           <section className="card main-card">
             <div className="card-top">
               <div>
-                <span className="label">
-                  현재 환율
-                </span>
+                <span className="label">현재 환율</span>
 
                 <h2>USD / KRW</h2>
               </div>
 
-              <span
-                className={`status ${statusType}`}
-              >
-                {statusType === "stale"
-                  ? `${status} · 오래된 데이터`
-                  : status}
+              <span className={`status ${statusType}`}>
+                {statusType === "stale" ? `${status} · 오래된 데이터` : status}
               </span>
             </div>
 
             <div className="main-rate">
-              {rate !== null
-                ? rate.toLocaleString()
-                : "-"}
+              {rate !== null ? rate.toLocaleString() : "-"}
 
               <span>KRW</span>
             </div>
 
             <div className="info-grid">
-
               <div className="info-item">
                 <span>단위</span>
-                <strong>
-                  KRW per USD
-                </strong>
+                <strong>KRW per USD</strong>
               </div>
 
               <div className="info-item">
                 <span>API 기준 날짜</span>
-                <strong>
-                  {apiDate ?? "-"}
-                </strong>
+                <strong>{apiDate ?? "-"}</strong>
+              </div>
+
+              <div className="info-item">
+                <span>기준 시간대</span>
+                <strong>Asia/Seoul</strong>
               </div>
 
               <div className="info-item">
                 <span>마지막 정상 조회</span>
-                <strong>
-                  {lastChecked ?? "-"}
-                </strong>
+                <strong>{lastChecked ?? "-"}</strong>
               </div>
-
             </div>
           </section>
 
@@ -447,9 +460,7 @@ function App() {
           <section className="card">
             <div className="section-title">
               <div>
-                <span className="label">
-                  SOURCE
-                </span>
+                <span className="label">SOURCE</span>
 
                 <h2>데이터 출처</h2>
               </div>
@@ -457,13 +468,9 @@ function App() {
 
             <div className="source-box">
               <div>
-                <strong>
-                  Frankfurter API
-                </strong>
+                <strong>Frankfurter API</strong>
 
-                <p>
-                  USD / KRW 환율 원자료
-                </p>
+                <p>USD / KRW 환율 원자료</p>
               </div>
 
               <a
@@ -481,42 +488,29 @@ function App() {
           <section className="card">
             <div className="section-title">
               <div>
-                <span className="label">
-                  HISTORY
-                </span>
+                <span className="label">HISTORY</span>
 
                 <h2>날짜별 기록</h2>
               </div>
 
-              <span className="small-text">
-                Asia/Seoul 기준
-              </span>
+              <span className="small-text">Asia/Seoul 기준</span>
             </div>
 
             {records.length === 0 ? (
-              <p className="empty">
-                저장된 기록이 없습니다.
-              </p>
+              <p className="empty">저장된 기록이 없습니다.</p>
             ) : (
               <div className="records">
                 {records.map((record) => (
-                  <div
-                    className="record"
-                    key={record.id}
-                  >
+                  <div className="record" key={record.id}>
                     <div>
-                      <strong>
-                        {record.record_date}
-                      </strong>
+                      <strong>{record.record_date}</strong>
 
-                      <span>
-                        자동 저장
-                      </span>
+                      <span>자동 저장</span>
                     </div>
 
                     <strong>
                       {Number(
-                        record.rate
+                        record.normalized_value ?? record.rate,
                       ).toLocaleString()}{" "}
                       KRW
                     </strong>
@@ -530,205 +524,118 @@ function App() {
           <section className="card">
             <div className="section-title">
               <div>
-                <span className="label">
-                  COMPARISON
-                </span>
+                <span className="label">COMPARISON</span>
 
-                <h2>
-                  이전 기록과 비교
-                </h2>
+                <h2>이전 기록과 비교</h2>
               </div>
             </div>
 
-            {!currentRecord ||
-            !previousRecord ? (
+            {!currentRecord || !previousRecord ? (
               <div className="empty-box">
-                <strong>
-                  비교할 이전 데이터가 없습니다.
-                </strong>
+                <strong>비교할 이전 데이터가 없습니다.</strong>
 
-                <p>
-                  서로 다른 날짜의 기록이 2건
-                  저장되면 자동으로 비교합니다.
-                </p>
+                <p>서로 다른 날짜의 기록이 2건 저장되면 자동으로 비교합니다.</p>
               </div>
             ) : (
               <div className="comparison">
-
                 <div className="compare-item">
-                  <span>
-                    {previousRecord.record_date}
-                  </span>
+                  <span>{previousRecord.record_date}</span>
 
                   <strong>
-                    {Number(
-                      previousRecord.rate
-                    ).toLocaleString()}{" "}
-                    KRW
+                    {Number(previousRecord.rate).toLocaleString()} KRW
                   </strong>
                 </div>
 
-                <div className="arrow">
-                  →
-                </div>
+                <div className="arrow">→</div>
 
                 <div className="compare-item">
-                  <span>
-                    {currentRecord.record_date}
-                  </span>
+                  <span>{currentRecord.record_date}</span>
 
                   <strong>
-                    {Number(
-                      currentRecord.rate
-                    ).toLocaleString()}{" "}
-                    KRW
+                    {Number(currentRecord.rate).toLocaleString()} KRW
                   </strong>
                 </div>
 
                 <div className="change">
-                  <span>
-                    변화
-                  </span>
+                  <span>변화</span>
 
                   <strong>
-                    {difference > 0
-                      ? "▲ +"
-                      : difference < 0
-                      ? "▼ "
-                      : ""}
+                    {difference > 0 ? "▲ +" : difference < 0 ? "▼ " : ""}
                     {difference.toFixed(2)} KRW
                   </strong>
 
                   <small>
-                    {changeRate > 0
-                      ? "+"
-                      : ""}
+                    {changeRate > 0 ? "+" : ""}
                     {changeRate.toFixed(2)}%
                   </small>
                 </div>
-
               </div>
             )}
           </section>
 
           {/* 검증 모드 */}
           <section className="card verification-card">
-
             <button
               className="verification-toggle"
-              onClick={() =>
-                setVerificationOpen(
-                  !verificationOpen
-                )
-              }
+              onClick={() => setVerificationOpen(!verificationOpen)}
             >
               <span>
-                <span className="label">
-                  DEVELOPER
-                </span>
+                <span className="label">DEVELOPER</span>
 
-                <strong>
-                  검증 모드
-                </strong>
+                <strong>검증 모드</strong>
               </span>
 
               <span className="arrow-small">
-                {verificationOpen
-                  ? "▲"
-                  : "▼"}
+                {verificationOpen ? "▲" : "▼"}
               </span>
             </button>
 
             {verificationOpen && (
               <div className="verification-content">
-
                 <p>
-                  실제 서비스 장애를 발생시키는 것이
-                  아니라 장애 처리 경로를 안전하게
-                  모의실험합니다.
+                  실제 서비스 장애를 발생시키는 것이 아니라 장애 처리 경로를
+                  안전하게 모의실험합니다.
                 </p>
 
                 <div className="test-buttons">
-
-                  <button
-                    onClick={() =>
-                      runErrorTest(
-                        ERROR_MODES.timeout
-                      )
-                    }
-                  >
+                  <button onClick={() => runErrorTest(ERROR_MODES.timeout)}>
                     Timeout
                   </button>
 
-                  <button
-                    onClick={() =>
-                      runErrorTest(
-                        ERROR_MODES.auth
-                      )
-                    }
-                  >
+                  <button onClick={() => runErrorTest(ERROR_MODES.auth)}>
                     인증 실패
                   </button>
 
-                  <button
-                    onClick={() =>
-                      runErrorTest(
-                        ERROR_MODES.limit
-                      )
-                    }
-                  >
+                  <button onClick={() => runErrorTest(ERROR_MODES.limit)}>
                     호출 제한
                   </button>
 
-                  <button
-                    onClick={() =>
-                      runErrorTest(
-                        ERROR_MODES.offline
-                      )
-                    }
-                  >
+                  <button onClick={() => runErrorTest(ERROR_MODES.offline)}>
                     오프라인
                   </button>
 
-                  <button
-                    onClick={() =>
-                      runErrorTest(
-                        ERROR_MODES.format
-                      )
-                    }
-                  >
+                  <button onClick={() => runErrorTest(ERROR_MODES.format)}>
                     응답 형식 변경
                   </button>
 
                   <button
                     className="restore-button"
-                    onClick={() =>
-                      fetchRate()
-                    }
+                    onClick={() => fetchRate()}
                   >
                     정상 상태로 복구
                   </button>
-
                 </div>
 
                 {/* 테스트 로그 */}
                 <div className="test-log">
-
                   <div className="test-log-header">
                     <div>
-                      <span className="label">
-                        TEST LOG
-                      </span>
+                      <span className="label">TEST LOG</span>
 
-                      <strong>
-                        장애 처리 과정
-                      </strong>
+                      <strong>장애 처리 과정</strong>
                     </div>
 
-                    <button
-                      className="clear-log"
-                      onClick={clearLogs}
-                    >
+                    <button className="clear-log" onClick={clearLogs}>
                       로그 지우기
                     </button>
                   </div>
@@ -740,38 +647,25 @@ function App() {
                   ) : (
                     <div className="log-list">
                       {logs.map((log) => (
-                        <div
-                          className={`log-row ${log.type}`}
-                          key={log.id}
-                        >
-                          <span className="log-time">
-                            {log.time}
-                          </span>
+                        <div className={`log-row ${log.type}`} key={log.id}>
+                          <span className="log-time">{log.time}</span>
 
                           <span className="log-dot" />
 
-                          <span className="log-message">
-                            {log.message}
-                          </span>
+                          <span className="log-message">{log.message}</span>
                         </div>
                       ))}
                     </div>
                   )}
-
                 </div>
-
               </div>
             )}
-
           </section>
-
         </main>
 
         <footer>
-          실제 API 데이터 · Supabase 자동 기록 ·
-          기준 시간대 Asia/Seoul
+          실제 API 데이터 · Supabase 자동 기록 · 기준 시간대 Asia/Seoul
         </footer>
-
       </div>
     </div>
   );
