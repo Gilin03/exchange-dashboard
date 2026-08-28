@@ -1,16 +1,80 @@
-# React + Vite
+# USD/KRW 환율 정보판 — 그래프 기능 개선 작업 보고서
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+AI A → AI B 인수인계 방식으로 진행한 **환율 추이 그래프 및 기간 선택 기능** 개선 작업의 검사 결과와 작업 기록입니다.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 1. 검사 10개
 
-## React Compiler
+> **개선 기능:** 날짜별 환율 추이 그래프 및 기간 선택 기능
+>
+> **공통 검사:** 작업 시작 전에 아래 10개를 고정하고 A/B 작업 후 동일한 기준으로 검사한다.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| ID | 작업 | 기대값 | A 구현 여부 | A 비고 | B 구현 여부 |
+| --- | --- | --- | :---: | --- | :---: |
+| **T05-01** | 그래프의 기간 선택 기능을 사용한다 | 기간 선택 옵션이 정상적으로 동작한다 | ✅ | | ✅ |
+| **T05-02** | 최근 3일, 최근 5일 등 기간을 변경한다 | 선택한 기간에 맞는 데이터만 그래프에 표시된다 | ✅ | | ✅ |
+| **T05-03** | 그래프의 특정 데이터 지점을 확인한다 | 해당 날짜와 환율 값을 확인할 수 있다 | ✅ | | ✅ |
+| **T05-04** | 그래프의 표시 범위를 확인한다 | 환율 변화가 그래프에서 알아보기 쉽게 표시된다 | ✅ | | ✅ |
+| **T05-05** | 기간을 변경한 후 기존 날짜별 기록과 비교한다 | 그래프에 표시되는 데이터가 기존 기록과 일치한다 | ✅ | | ✅ |
+| **T05-06** | 그래프에서 제공되는 조작 기능을 사용한다 | 각 조작 기능이 의도한 동작을 수행한다 | ⬜ | **AI B 기능 구현 필요 (보완/수정 대상)** | ✅ |
+| **T05-07** | 그래프의 날짜 구간을 이동해 확인한다 | 이동한 구간의 데이터가 정상적으로 표시된다 | ✅ | | ✅ |
+| **T05-08** | 그래프를 확대하거나 축소한다 | 데이터가 깨지거나 겹치지 않고 정상적으로 표시된다 | ⬜ | **차트 Zoom(확대/축소) 기능 추가 구현** | ✅ |
+| **T05-09** | 그래프를 마우스로 이동하며 확인한다 | 그래프 조작 중 데이터가 비정상적으로 변경되지 않는다 | ⬜ | **확대 상태에서 Pan(마우스 드래그 이동) 구현 필요** | ✅ |
+| **T05-10** | 좁은 화면에서 그래프와 기간 선택 기능을 사용한다 | 그래프와 조작 요소가 잘리지 않고 정상적으로 사용할 수 있다 | ✅ | | ✅ |
 
-## Expanding the Oxlint configuration
+### 도구 선택 기준
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+> 다음 작업에서는 작업 시간, 요청 횟수, 오류 회차와 재작업량을 비교해 효율이 높은 도구를 먼저 사용한다.
+
+---
+
+## 2. 작업 기록
+
+| 단계 | 기록 |
+| --- | --- |
+| AI A 시작 시각 | 08/28, 15:20 |
+| AI A 종료 시각 | 08/28, 15:45 |
+| AI A 요청 횟수 | 8 / 8회 |
+| AI A 검사 결과 | 7 / 10 |
+| 인계 문서 작성 시각 | 08/28, 15:50 |
+| AI B 시작 시각 | 08/28, 16:00 |
+| AI B 종료 시각 | 08/28, 16:10 |
+| AI B 요청 횟수 | 3 / 8회 |
+| AI B 검사 결과 | 10 / 10 |
+| 공통 상한 시간 | 30분 |
+
+| 항목 | AI A | AI B |
+| --- | --- | --- |
+| 시작 소스 버전 | `88cb932` | `f456b57` |
+| 종료 소스 버전 | `f456b57` | `632c8da` |
+
+---
+
+## 3. 최종 비교표
+
+> 작업이 **전부 끝난 다음에** 작성한다.
+
+| 비교 항목 | 도구 A | 도구 B |
+| --- | :---: | :---: |
+| 작업 시간 | 25 | 10 |
+| 요청/호출 수 | 8 | 3 |
+| 오류 회차 | 2 | 0 |
+| 최종 검사 통과 | 8 / 10 | 10 / 10 |
+
+---
+
+## 4. HANDOFF 재현 기록
+
+> **HANDOFF 재현:** 새 작업 환경에서 HANDOFF.md의 실행 명령을 확인했으며 프로젝트 실행이 정상적으로 이루어졌다.
+
+![alt text](image-1.png)
+
+> **인수인계 전달:** AI A가 작성한 HANDOFF.md를 AI B에 그대로 제공했으며, 첫 대화 전문은 제공하지 않았다.
+
+![alt text](image-2.png)
+---
+
+## 5. AI A 최초 요청
+![alt text](image-3.png)
+
