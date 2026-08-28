@@ -1,4 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from "recharts";
 import "./App.css";
 import { supabase } from "./supabase";
 
@@ -25,6 +34,21 @@ function getKoreaDateTime() {
   });
 }
 
+// Custom Tooltip 컴포넌트
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="custom-tooltip">
+        <p className="tooltip-date">{label}</p>
+        <p className="tooltip-rate">
+          환율: <strong>{Number(payload[0].value).toLocaleString()} KRW</strong>
+        </p>
+      </div>
+    );
+  }
+  return null;
+};
+
 function App() {
   const [rate, setRate] = useState(null);
   const [apiDate, setApiDate] = useState(null);
@@ -35,8 +59,14 @@ function App() {
   const [records, setRecords] = useState([]);
   const [verificationOpen, setVerificationOpen] = useState(false);
 
+  // 새로고침 로딩 상태
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   // 검증 로그
   const [logs, setLogs] = useState([]);
+
+  // T05-01, T05-02: 기간 선택 상태 ('3d' | '5d' | '1m' | 'all')
+  const [period, setPeriod] = useState("5d");
 
   // -----------------------------
   // 검증 로그 추가
@@ -80,8 +110,6 @@ function App() {
   // 오늘 기록 자동 저장
   // -----------------------------
   const saveTodayRecord = async (data) => {
-    console.log("🔥 새 saveTodayRecord 실행됨", data);
-
     const today = getKoreaDate();
     const fetchedAt = new Date().toISOString();
 
@@ -104,9 +132,6 @@ function App() {
       record_timezone: "Asia/Seoul",
     };
 
-    console.log("🔥 저장할 newRecord:", newRecord);
-
-    // 같은 날짜의 기존 기록 확인
     const { data: existingRecord, error: checkError } = await supabase
       .from("exchange_records")
       .select("id")
@@ -119,18 +144,13 @@ function App() {
       return;
     }
 
-    // 같은 날짜가 있으면 UPDATE
     if (existingRecord) {
       addLog("오늘 기록 존재 → 기존 기록 갱신");
 
-      const { data: updatedData, error: updateError } = await supabase
+      const { error: updateError } = await supabase
         .from("exchange_records")
         .update(newRecord)
-        .eq("id", existingRecord.id)
-        .select();
-
-      console.log("🔥 UPDATE 결과:", updatedData);
-      console.log("🔥 UPDATE 오류:", updateError);
+        .eq("id", existingRecord.id);
 
       if (updateError) {
         console.error("오늘 기록 갱신 실패:", updateError);
@@ -139,21 +159,15 @@ function App() {
       }
 
       addLog("오늘 데이터 Supabase 갱신 완료", "success");
-
       await loadRecords();
       return;
     }
 
-    // 새로운 날짜면 INSERT
     addLog("오늘 실제 환율 데이터 신규 저장 시작");
 
-    const { data: insertedData, error: insertError } = await supabase
+    const { error: insertError } = await supabase
       .from("exchange_records")
-      .insert(newRecord)
-      .select();
-
-    console.log("🔥 INSERT 결과:", insertedData);
-    console.log("🔥 INSERT 오류:", insertError);
+      .insert(newRecord);
 
     if (insertError) {
       console.error("오늘 기록 저장 실패:", insertError);
@@ -162,7 +176,6 @@ function App() {
     }
 
     addLog("오늘 데이터 Supabase 신규 저장 완료", "success");
-
     await loadRecords();
   };
 
@@ -173,9 +186,7 @@ function App() {
     if (mode === ERROR_MODES.timeout) {
       addLog("API 요청 시작");
       addLog("Timeout 테스트: 요청 지연 시작");
-
       await new Promise((resolve) => setTimeout(resolve, 2500));
-
       addLog("Timeout 감지", "error");
       throw new Error("TIMEOUT");
     }
@@ -184,7 +195,6 @@ function App() {
       addLog("API 요청 시작");
       addLog("테스트 응답: HTTP 401");
       addLog("인증 실패 감지", "error");
-
       throw new Error("AUTH_FAILED");
     }
 
@@ -192,36 +202,33 @@ function App() {
       addLog("API 요청 시작");
       addLog("테스트 응답: HTTP 429");
       addLog("호출 제한 감지", "error");
-
       throw new Error("RATE_LIMIT");
     }
 
     if (mode === ERROR_MODES.offline) {
       addLog("네트워크 요청 시작");
       addLog("Network Error 감지", "error");
-
       throw new Error("OFFLINE");
     }
 
     if (mode === ERROR_MODES.format) {
       addLog("API 응답 수신");
       addLog("응답 필드 검사 시작");
-
       addLog("필수 필드(rate/date) 확인 실패", "error");
-
-      return {
-        wrong: true,
-      };
+      return { wrong: true };
     }
 
     return null;
   };
 
   // -----------------------------
-  // 실제 환율 조회
+  // 실제 환율 조회 (새로고침)
   // -----------------------------
   const fetchRate = async (mode = null) => {
+    if (isRefreshing) return;
+
     try {
+      setIsRefreshing(true);
       setStatus("조회 중");
       setStatusType("loading");
 
@@ -237,7 +244,6 @@ function App() {
         data = await simulateError(mode);
       } else {
         const response = await fetch(API_URL);
-
         addLog(`API 응답 수신: HTTP ${response.status}`);
 
         if (!response.ok) {
@@ -245,11 +251,9 @@ function App() {
         }
 
         data = await response.json();
-
         addLog("API JSON 파싱 완료");
       }
 
-      // 응답 형식 검사
       if (
         !data ||
         typeof data.rate !== "number" ||
@@ -258,7 +262,6 @@ function App() {
         throw new Error("FORMAT_CHANGED");
       }
 
-      // 정상 데이터
       setRate(data.rate);
       setApiDate(data.date);
       setLastChecked(getKoreaDateTime());
@@ -269,7 +272,6 @@ function App() {
       addLog("정상 데이터 확인", "success");
       addLog("화면값 갱신 완료", "success");
 
-      // 실제 데이터일 때만 저장
       if (!mode) {
         await saveTodayRecord(data);
       }
@@ -281,53 +283,45 @@ function App() {
       console.error(error);
 
       let message = "조회 실패";
-
       switch (error.message) {
         case "TIMEOUT":
           message = "시간 초과";
           break;
-
         case "AUTH_FAILED":
           message = "인증 실패";
           break;
-
         case "RATE_LIMIT":
           message = "호출 제한";
           break;
-
         case "OFFLINE":
           message = "오프라인";
           break;
-
         case "FORMAT_CHANGED":
           message = "응답 형식 변경";
           break;
-
         default:
           message = "조회 실패";
       }
 
       setStatus(message);
       setStatusType("stale");
-
-      // 가장 중요한 장애 처리 로그
       addLog(`${message} 처리 분기로 이동`, "error");
 
       if (rate !== null) {
         addLog(`마지막 정상값 유지: ${rate.toLocaleString()} KRW`, "success");
-
         addLog("현재 자료가 아니므로 '오래된 데이터' 표시", "warning");
       } else {
         addLog("정상값이 없어 값을 표시하지 않음", "warning");
       }
-
-      addLog("다시 시도하면 정상 API 조회 가능");
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
-  // -----------------------------
-  // 모드 이름
-  // -----------------------------
+  const handleRefresh = () => {
+    fetchRate();
+  };
+
   function getModeName(mode) {
     const names = {
       timeout: "Timeout",
@@ -336,42 +330,68 @@ function App() {
       offline: "오프라인",
       format: "응답 형식 변경",
     };
-
     return names[mode] ?? mode;
   }
 
-  // -----------------------------
-  // 첫 실행
-  // -----------------------------
   useEffect(() => {
     const start = async () => {
       await loadRecords();
       await fetchRate();
     };
-
     start();
   }, []);
 
-  // -----------------------------
-  // 테스트 실행
-  // -----------------------------
   const runErrorTest = (mode) => {
     fetchRate(mode);
   };
 
-  // -----------------------------
-  // 로그 초기화
-  // -----------------------------
   const clearLogs = () => {
     setLogs([]);
   };
 
-  // -----------------------------
-  // 비교
-  // -----------------------------
-  // -----------------------------
-  // 비교
-  // -----------------------------
+  // 3일 / 5일 / 1개월 / 전체 선택 필터링
+  const chartData = useMemo(() => {
+    if (!records || records.length === 0) return [];
+
+    const sorted = [...records].sort(
+      (a, b) => new Date(a.record_date) - new Date(b.record_date)
+    );
+
+    if (period === "all") {
+      return sorted.map((r) => ({
+        date: r.record_date,
+        rate: Number(r.normalized_value ?? r.rate),
+      }));
+    }
+
+    const now = new Date();
+    let cutoff = new Date();
+
+    if (period === "3d") {
+      cutoff.setDate(now.getDate() - 3);
+    } else if (period === "5d") {
+      cutoff.setDate(now.getDate() - 5);
+    } else if (period === "1m") {
+      cutoff.setMonth(now.getMonth() - 1);
+    }
+
+    return sorted
+      .filter((r) => new Date(r.record_date) >= cutoff)
+      .map((r) => ({
+        date: r.record_date,
+        rate: Number(r.normalized_value ?? r.rate),
+      }));
+  }, [records, period]);
+
+  const yDomain = useMemo(() => {
+    if (chartData.length === 0) return [0, "auto"];
+    const rates = chartData.map((d) => d.rate);
+    const min = Math.min(...rates);
+    const max = Math.max(...rates);
+    const padding = Math.max((max - min) * 0.1, 1);
+    return [Math.floor(min - padding), Math.ceil(max + padding)];
+  }, [chartData]);
+
   const currentRecord = records[0];
   const previousRecord = records[1];
 
@@ -380,11 +400,10 @@ function App() {
 
   if (currentRecord && previousRecord) {
     const currentValue = Number(
-      currentRecord.normalized_value ?? currentRecord.rate,
+      currentRecord.normalized_value ?? currentRecord.rate
     );
-
     const previousValue = Number(
-      previousRecord.normalized_value ?? previousRecord.rate,
+      previousRecord.normalized_value ?? previousRecord.rate
     );
 
     if (
@@ -397,18 +416,27 @@ function App() {
       changeRate = (difference / previousValue) * 100;
     }
   }
+
   return (
     <div className="app">
       <div className="container">
         <header className="header">
           <div>
             <p className="eyebrow">DAILY INFORMATION BOARD</p>
-
             <h1>오늘의 환율 정보판</h1>
-
             <p className="description">
               USD / KRW 환율을 확인하고 날짜별 변화를 기록합니다.
             </p>
+          </div>
+
+          <div className="header-actions">
+            <button
+              className="refresh-button"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              {isRefreshing ? "로딩 중..." : "🔄 새로고침"}
+            </button>
           </div>
         </header>
 
@@ -418,7 +446,6 @@ function App() {
             <div className="card-top">
               <div>
                 <span className="label">현재 환율</span>
-
                 <h2>USD / KRW</h2>
               </div>
 
@@ -429,7 +456,6 @@ function App() {
 
             <div className="main-rate">
               {rate !== null ? rate.toLocaleString() : "-"}
-
               <span>KRW</span>
             </div>
 
@@ -438,17 +464,14 @@ function App() {
                 <span>단위</span>
                 <strong>KRW per USD</strong>
               </div>
-
               <div className="info-item">
                 <span>API 기준 날짜</span>
                 <strong>{apiDate ?? "-"}</strong>
               </div>
-
               <div className="info-item">
                 <span>기준 시간대</span>
                 <strong>Asia/Seoul</strong>
               </div>
-
               <div className="info-item">
                 <span>마지막 정상 조회</span>
                 <strong>{lastChecked ?? "-"}</strong>
@@ -461,7 +484,6 @@ function App() {
             <div className="section-title">
               <div>
                 <span className="label">SOURCE</span>
-
                 <h2>데이터 출처</h2>
               </div>
             </div>
@@ -469,7 +491,6 @@ function App() {
             <div className="source-box">
               <div>
                 <strong>Frankfurter API</strong>
-
                 <p>USD / KRW 환율 원자료</p>
               </div>
 
@@ -484,15 +505,97 @@ function App() {
             </div>
           </section>
 
+          {/* 환율 추이 그래프 섹션 */}
+          <section className="card chart-card">
+            <div className="section-title">
+              <div>
+                <span className="label">TREND CHART</span>
+                <h2>환율 추이 그래프</h2>
+              </div>
+
+              {/* 3일, 5일, 1개월, 전체 옵션 적용 */}
+              <div className="period-buttons">
+                <button
+                  className={period === "3d" ? "active" : ""}
+                  onClick={() => setPeriod("3d")}
+                >
+                  3일
+                </button>
+                <button
+                  className={period === "5d" ? "active" : ""}
+                  onClick={() => setPeriod("5d")}
+                >
+                  5일
+                </button>
+                <button
+                  className={period === "1m" ? "active" : ""}
+                  onClick={() => setPeriod("1m")}
+                >
+                  1개월
+                </button>
+                <button
+                  className={period === "all" ? "active" : ""}
+                  onClick={() => setPeriod("all")}
+                >
+                  전체
+                </button>
+              </div>
+            </div>
+
+            <div className="chart-container">
+              {chartData.length === 0 ? (
+                <div className="empty-box">
+                  <strong>표시할 그래프 데이터가 없습니다.</strong>
+                  <p>기록이 수집되면 그래프가 생성됩니다.</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <AreaChart
+                    data={chartData}
+                    margin={{ top: 15, right: 10, left: -20, bottom: 0 }}
+                  >
+                    <defs>
+                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#9b7cff" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#9b7cff" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(119, 136, 190, 0.15)" />
+                    <XAxis
+                      dataKey="date"
+                      stroke="#707b9f"
+                      fontSize={11}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={yDomain}
+                      stroke="#707b9f"
+                      fontSize={11}
+                      tickLine={false}
+                      tickFormatter={(val) => val.toLocaleString()}
+                    />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Area
+                      type="monotone"
+                      dataKey="rate"
+                      stroke="#9b7cff"
+                      strokeWidth={2}
+                      fillOpacity={1}
+                      fill="url(#colorRate)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </section>
+
           {/* 날짜별 기록 */}
           <section className="card">
             <div className="section-title">
               <div>
                 <span className="label">HISTORY</span>
-
                 <h2>날짜별 기록</h2>
               </div>
-
               <span className="small-text">Asia/Seoul 기준</span>
             </div>
 
@@ -504,13 +607,12 @@ function App() {
                   <div className="record" key={record.id}>
                     <div>
                       <strong>{record.record_date}</strong>
-
                       <span>자동 저장</span>
                     </div>
 
                     <strong>
                       {Number(
-                        record.normalized_value ?? record.rate,
+                        record.normalized_value ?? record.rate
                       ).toLocaleString()}{" "}
                       KRW
                     </strong>
@@ -525,7 +627,6 @@ function App() {
             <div className="section-title">
               <div>
                 <span className="label">COMPARISON</span>
-
                 <h2>이전 기록과 비교</h2>
               </div>
             </div>
@@ -533,14 +634,12 @@ function App() {
             {!currentRecord || !previousRecord ? (
               <div className="empty-box">
                 <strong>비교할 이전 데이터가 없습니다.</strong>
-
                 <p>서로 다른 날짜의 기록이 2건 저장되면 자동으로 비교합니다.</p>
               </div>
             ) : (
               <div className="comparison">
                 <div className="compare-item">
                   <span>{previousRecord.record_date}</span>
-
                   <strong>
                     {Number(previousRecord.rate).toLocaleString()} KRW
                   </strong>
@@ -550,7 +649,6 @@ function App() {
 
                 <div className="compare-item">
                   <span>{currentRecord.record_date}</span>
-
                   <strong>
                     {Number(currentRecord.rate).toLocaleString()} KRW
                   </strong>
@@ -558,12 +656,10 @@ function App() {
 
                 <div className="change">
                   <span>변화</span>
-
                   <strong>
                     {difference > 0 ? "▲ +" : difference < 0 ? "▼ " : ""}
                     {difference.toFixed(2)} KRW
                   </strong>
-
                   <small>
                     {changeRate > 0 ? "+" : ""}
                     {changeRate.toFixed(2)}%
@@ -581,7 +677,6 @@ function App() {
             >
               <span>
                 <span className="label">DEVELOPER</span>
-
                 <strong>검증 모드</strong>
               </span>
 
@@ -598,29 +693,40 @@ function App() {
                 </p>
 
                 <div className="test-buttons">
-                  <button onClick={() => runErrorTest(ERROR_MODES.timeout)}>
+                  <button
+                    onClick={() => runErrorTest(ERROR_MODES.timeout)}
+                    disabled={isRefreshing}
+                  >
                     Timeout
                   </button>
-
-                  <button onClick={() => runErrorTest(ERROR_MODES.auth)}>
+                  <button
+                    onClick={() => runErrorTest(ERROR_MODES.auth)}
+                    disabled={isRefreshing}
+                  >
                     인증 실패
                   </button>
-
-                  <button onClick={() => runErrorTest(ERROR_MODES.limit)}>
+                  <button
+                    onClick={() => runErrorTest(ERROR_MODES.limit)}
+                    disabled={isRefreshing}
+                  >
                     호출 제한
                   </button>
-
-                  <button onClick={() => runErrorTest(ERROR_MODES.offline)}>
+                  <button
+                    onClick={() => runErrorTest(ERROR_MODES.offline)}
+                    disabled={isRefreshing}
+                  >
                     오프라인
                   </button>
-
-                  <button onClick={() => runErrorTest(ERROR_MODES.format)}>
+                  <button
+                    onClick={() => runErrorTest(ERROR_MODES.format)}
+                    disabled={isRefreshing}
+                  >
                     응답 형식 변경
                   </button>
-
                   <button
                     className="restore-button"
                     onClick={() => fetchRate()}
+                    disabled={isRefreshing}
                   >
                     정상 상태로 복구
                   </button>
@@ -631,7 +737,6 @@ function App() {
                   <div className="test-log-header">
                     <div>
                       <span className="label">TEST LOG</span>
-
                       <strong>장애 처리 과정</strong>
                     </div>
 
@@ -649,9 +754,7 @@ function App() {
                       {logs.map((log) => (
                         <div className={`log-row ${log.type}`} key={log.id}>
                           <span className="log-time">{log.time}</span>
-
                           <span className="log-dot" />
-
                           <span className="log-message">{log.message}</span>
                         </div>
                       ))}
