@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -7,6 +7,7 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
+  ReferenceArea,
 } from "recharts";
 import "./App.css";
 import { supabase } from "./supabase";
@@ -67,6 +68,20 @@ function App() {
 
   // T05-01, T05-02: 기간 선택 상태 ('3d' | '5d' | '1m' | 'all')
   const [period, setPeriod] = useState("5d");
+
+  // -----------------------------
+  // T05-06, T05-08, T05-09: 차트 Zoom / Pan 상태
+  // -----------------------------
+  // 확대된 구간 (chartData 기준 인덱스). null이면 전체 구간 표시.
+  const [zoomDomain, setZoomDomain] = useState(null);
+  // 드래그로 확대 영역을 선택하는 동안 표시할 임시 영역
+  const [refAreaLeft, setRefAreaLeft] = useState("");
+  const [refAreaRight, setRefAreaRight] = useState("");
+  // 확대된 상태에서 드래그로 이동(Pan) 중인지 여부
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartIndexRef = useRef(null);
+
+  const ZOOM_MIN_POINTS = 3;
 
   // -----------------------------
   // 검증 로그 추가
@@ -383,14 +398,196 @@ function App() {
       }));
   }, [records, period]);
 
+  // 기간(period)이 바뀌면 확대/이동 상태를 초기화
+  useEffect(() => {
+    setZoomDomain(null);
+    setRefAreaLeft("");
+    setRefAreaRight("");
+    setIsPanning(false);
+    panStartIndexRef.current = null;
+  }, [period]);
+
+  // 시작/끝 인덱스가 데이터 범위를 벗어나지 않도록 보정 (구간 크기는 유지)
+  const clampWindow = useCallback((startIndex, endIndex, dataLength) => {
+    let s = startIndex;
+    let e = endIndex;
+
+    if (s < 0) {
+      e += -s;
+      s = 0;
+    }
+    if (e > dataLength - 1) {
+      s -= e - (dataLength - 1);
+      e = dataLength - 1;
+    }
+
+    s = Math.max(0, s);
+    e = Math.min(dataLength - 1, Math.max(e, s));
+    return { startIndex: s, endIndex: e };
+  }, []);
+
+  // 실제로 화면에 표시되는 데이터 (확대된 경우 해당 구간만)
+  const displayedData = useMemo(() => {
+    if (!zoomDomain) return chartData;
+    return chartData.slice(zoomDomain.startIndex, zoomDomain.endIndex + 1);
+  }, [chartData, zoomDomain]);
+
+  const isZoomed = zoomDomain !== null;
+
+  const zoomToWindow = useCallback(
+    (startIndex, endIndex) => {
+      if (chartData.length < ZOOM_MIN_POINTS) return;
+      const clamped = clampWindow(startIndex, endIndex, chartData.length);
+      if (clamped.endIndex - clamped.startIndex + 1 >= chartData.length) {
+        setZoomDomain(null);
+      } else {
+        setZoomDomain(clamped);
+      }
+    },
+    [chartData.length, clampWindow]
+  );
+
+  // T05-08: 버튼으로 확대
+  const handleZoomIn = () => {
+    const total = chartData.length;
+    if (total < ZOOM_MIN_POINTS) return;
+
+    const current = zoomDomain ?? { startIndex: 0, endIndex: total - 1 };
+    const currentSize = current.endIndex - current.startIndex + 1;
+    const newSize = Math.max(ZOOM_MIN_POINTS, Math.round(currentSize * 0.6));
+    if (newSize >= currentSize) return;
+
+    const center = (current.startIndex + current.endIndex) / 2;
+    const half = (newSize - 1) / 2;
+    zoomToWindow(Math.round(center - half), Math.round(center + half));
+    addLog("차트 확대(+) 조작", "info");
+  };
+
+  // T05-08: 버튼으로 축소
+  const handleZoomOut = () => {
+    const total = chartData.length;
+    const current = zoomDomain ?? { startIndex: 0, endIndex: total - 1 };
+    const currentSize = current.endIndex - current.startIndex + 1;
+    const newSize = Math.min(total, Math.round(currentSize / 0.6));
+
+    if (newSize >= total) {
+      setZoomDomain(null);
+    } else {
+      const center = (current.startIndex + current.endIndex) / 2;
+      const half = (newSize - 1) / 2;
+      zoomToWindow(Math.round(center - half), Math.round(center + half));
+    }
+    addLog("차트 축소(-) 조작", "info");
+  };
+
+  // T05-09: 버튼으로 좌우 이동 (Pan)
+  const handlePanButton = (direction) => {
+    if (!zoomDomain) return;
+    const windowSize = zoomDomain.endIndex - zoomDomain.startIndex + 1;
+    const step = Math.max(1, Math.round(windowSize * 0.3)) * direction;
+    zoomToWindow(zoomDomain.startIndex + step, zoomDomain.endIndex + step);
+  };
+
+  // T05-06: 전체 보기로 복귀
+  const handleResetZoom = () => {
+    setZoomDomain(null);
+    addLog("차트 확대/이동 초기화", "info");
+  };
+
+  // 마우스 휠로 확대/축소
+  const handleWheelZoom = (e) => {
+    if (chartData.length < ZOOM_MIN_POINTS) return;
+    e.preventDefault();
+    if (e.deltaY < 0) {
+      handleZoomIn();
+    } else if (e.deltaY > 0) {
+      handleZoomOut();
+    }
+  };
+
+  // 마우스 Down: 확대 전이면 드래그 영역 선택 시작, 확대 상태면 Pan 시작
+  const handleChartMouseDown = (e) => {
+    if (!e) return;
+    if (isZoomed) {
+      if (e.activeTooltipIndex === undefined || e.activeTooltipIndex === null) return;
+      setIsPanning(true);
+      panStartIndexRef.current = e.activeTooltipIndex;
+    } else {
+      if (e.activeLabel === undefined) return;
+      setRefAreaLeft(e.activeLabel);
+      setRefAreaRight(e.activeLabel);
+    }
+  };
+
+  // 마우스 Move: 드래그 영역 갱신 또는 Pan 이동 처리
+  const handleChartMouseMove = (e) => {
+    if (!e) return;
+
+    if (isPanning) {
+      if (
+        e.activeTooltipIndex === undefined ||
+        e.activeTooltipIndex === null ||
+        panStartIndexRef.current === null
+      ) {
+        return;
+      }
+      const delta = e.activeTooltipIndex - panStartIndexRef.current;
+      if (delta === 0) return;
+
+      setZoomDomain((prev) => {
+        if (!prev) return prev;
+        const windowSize = prev.endIndex - prev.startIndex;
+        const next = clampWindow(
+          prev.startIndex - delta,
+          prev.endIndex - delta,
+          chartData.length
+        );
+        // 경계에 도달해 구간 크기가 줄어들면 더 이상 이동하지 않음
+        if (next.endIndex - next.startIndex !== windowSize) return prev;
+        return next;
+      });
+      panStartIndexRef.current = e.activeTooltipIndex;
+    } else if (refAreaLeft) {
+      if (e.activeLabel === undefined) return;
+      setRefAreaRight(e.activeLabel);
+    }
+  };
+
+  // 마우스 Up: 드래그 영역을 실제 확대 구간으로 확정하거나 Pan 종료
+  const handleChartMouseUp = () => {
+    if (isPanning) {
+      setIsPanning(false);
+      panStartIndexRef.current = null;
+      return;
+    }
+
+    if (refAreaLeft && refAreaRight && refAreaLeft !== refAreaRight) {
+      let leftIndex = chartData.findIndex((d) => d.date === refAreaLeft);
+      let rightIndex = chartData.findIndex((d) => d.date === refAreaRight);
+
+      if (leftIndex !== -1 && rightIndex !== -1) {
+        if (leftIndex > rightIndex) {
+          [leftIndex, rightIndex] = [rightIndex, leftIndex];
+        }
+        if (rightIndex - leftIndex >= 1) {
+          zoomToWindow(leftIndex, rightIndex);
+          addLog(`차트 드래그 확대: ${refAreaLeft} ~ ${refAreaRight}`, "info");
+        }
+      }
+    }
+
+    setRefAreaLeft("");
+    setRefAreaRight("");
+  };
+
   const yDomain = useMemo(() => {
-    if (chartData.length === 0) return [0, "auto"];
-    const rates = chartData.map((d) => d.rate);
+    if (displayedData.length === 0) return [0, "auto"];
+    const rates = displayedData.map((d) => d.rate);
     const min = Math.min(...rates);
     const max = Math.max(...rates);
     const padding = Math.max((max - min) * 0.1, 1);
     return [Math.floor(min - padding), Math.ceil(max + padding)];
-  }, [chartData]);
+  }, [displayedData]);
 
   const currentRecord = records[0];
   const previousRecord = records[1];
@@ -542,6 +739,55 @@ function App() {
               </div>
             </div>
 
+            {/* T05-06, T05-08, T05-09: 차트 조작(확대/축소/이동) 컨트롤 */}
+            <div className="chart-zoom-controls">
+              <div className="zoom-button-group">
+                <button
+                  type="button"
+                  onClick={() => handlePanButton(-1)}
+                  disabled={!isZoomed}
+                  aria-label="이전 구간으로 이동"
+                >
+                  ◀
+                </button>
+                <button
+                  type="button"
+                  onClick={handleZoomOut}
+                  disabled={!isZoomed}
+                  aria-label="축소"
+                >
+                  －
+                </button>
+                <button
+                  type="button"
+                  onClick={handleZoomIn}
+                  disabled={chartData.length < ZOOM_MIN_POINTS}
+                  aria-label="확대"
+                >
+                  ＋
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePanButton(1)}
+                  disabled={!isZoomed}
+                  aria-label="다음 구간으로 이동"
+                >
+                  ▶
+                </button>
+                <button
+                  type="button"
+                  className="zoom-reset-button"
+                  onClick={handleResetZoom}
+                  disabled={!isZoomed}
+                >
+                  전체보기
+                </button>
+              </div>
+              <span className="zoom-hint">
+                드래그로 영역 확대 · 확대 후 드래그로 좌우 이동 · 휠로 확대/축소
+              </span>
+            </div>
+
             <div className="chart-container">
               {chartData.length === 0 ? (
                 <div className="empty-box">
@@ -549,42 +795,62 @@ function App() {
                   <p>기록이 수집되면 그래프가 생성됩니다.</p>
                 </div>
               ) : (
-                <ResponsiveContainer width="100%" height={260}>
-                  <AreaChart
-                    data={chartData}
-                    margin={{ top: 15, right: 10, left: -20, bottom: 0 }}
-                  >
-                    <defs>
-                      <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#9b7cff" stopOpacity={0.4} />
-                        <stop offset="95%" stopColor="#9b7cff" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(119, 136, 190, 0.15)" />
-                    <XAxis
-                      dataKey="date"
-                      stroke="#707b9f"
-                      fontSize={11}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      domain={yDomain}
-                      stroke="#707b9f"
-                      fontSize={11}
-                      tickLine={false}
-                      tickFormatter={(val) => val.toLocaleString()}
-                    />
-                    <Tooltip content={<CustomTooltip />} />
-                    <Area
-                      type="monotone"
-                      dataKey="rate"
-                      stroke="#9b7cff"
-                      strokeWidth={2}
-                      fillOpacity={1}
-                      fill="url(#colorRate)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <div
+                  className={`chart-zoom-wrapper${isPanning ? " panning" : ""}`}
+                  onWheel={handleWheelZoom}
+                >
+                  <ResponsiveContainer width="100%" height={260}>
+                    <AreaChart
+                      data={displayedData}
+                      margin={{ top: 15, right: 10, left: -20, bottom: 0 }}
+                      onMouseDown={handleChartMouseDown}
+                      onMouseMove={handleChartMouseMove}
+                      onMouseUp={handleChartMouseUp}
+                      onMouseLeave={handleChartMouseUp}
+                    >
+                      <defs>
+                        <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#9b7cff" stopOpacity={0.4} />
+                          <stop offset="95%" stopColor="#9b7cff" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(119, 136, 190, 0.15)" />
+                      <XAxis
+                        dataKey="date"
+                        stroke="#707b9f"
+                        fontSize={11}
+                        tickLine={false}
+                        allowDuplicatedCategory={false}
+                      />
+                      <YAxis
+                        domain={yDomain}
+                        stroke="#707b9f"
+                        fontSize={11}
+                        tickLine={false}
+                        tickFormatter={(val) => val.toLocaleString()}
+                      />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Area
+                        type="monotone"
+                        dataKey="rate"
+                        stroke="#9b7cff"
+                        strokeWidth={2}
+                        fillOpacity={1}
+                        fill="url(#colorRate)"
+                        isAnimationActive={!isZoomed}
+                      />
+                      {refAreaLeft && refAreaRight ? (
+                        <ReferenceArea
+                          x1={refAreaLeft}
+                          x2={refAreaRight}
+                          strokeOpacity={0.3}
+                          fill="#9b7cff"
+                          fillOpacity={0.15}
+                        />
+                      ) : null}
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               )}
             </div>
           </section>

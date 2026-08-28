@@ -888,6 +888,79 @@ footer {
   width: 100%;
 }
 
+/* Zoom / Pan 컨트롤 */
+.chart-zoom-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.zoom-button-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 22, 52, 0.6);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(132, 105, 255, 0.2);
+}
+
+.zoom-button-group button {
+  min-width: 32px;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: #b8c0e4;
+  font-size: 13px;
+  font-weight: 700;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.zoom-button-group button:hover:not(:disabled) {
+  color: #f5f7ff;
+  background: rgba(123, 76, 255, 0.25);
+}
+
+.zoom-button-group button:disabled {
+  color: #4a5171;
+  cursor: not-allowed;
+}
+
+.zoom-reset-button {
+  font-size: 11px !important;
+  padding: 5px 12px !important;
+}
+
+.zoom-hint {
+  color: #616c92;
+  font-size: 10.5px;
+}
+
+.chart-zoom-wrapper {
+  cursor: crosshair;
+  user-select: none;
+}
+
+.chart-zoom-wrapper.panning {
+  cursor: grabbing;
+}
+
+@media (max-width: 600px) {
+  .chart-zoom-controls {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .zoom-hint {
+    font-size: 10px;
+  }
+}
+
 /* Custom Tooltip */
 .custom-tooltip {
   background: rgba(12, 22, 48, 0.95);
